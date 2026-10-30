@@ -1,0 +1,1 @@
+<svg xmlns='http://www.w3.org/2000/svg'><defs><marker id='a' markerHeight='5' markerUnits='strokeWidth' markerWidth='7' orient='auto' refX='7' refY='2.5'><path fill='black' d='m0 0 7 2.5L0 5z'/></marker></defs><line x2='100%' y1='100%' stroke='black' stroke-width='.06em' marker-end='url(#a)' vector-effect='non-scaling-stroke'/></svg>
