@@ -1,12 +1,9 @@
-//! Provision only instance-owned resources, then release the SDK scope before execution.
+//! Use one administrator-selected CPR Client Key, then release the SDK scope before execution.
 use crate::{
     execution::{self, HttpExecutor},
     model::Credential,
 };
-use gateway_plugin_sdk::call::{
-    middleware::http::Version,
-    resources::{GroupEnsureRequest, GroupMembersChange, KeyEnsureRequest},
-};
+use gateway_plugin_sdk::call::middleware::http::Version;
 use gateway_plugin_sdk::{
     client::{HostClient, HttpBody, HttpFrame, HttpRequest},
     ErrorCode, PluginFault,
@@ -22,33 +19,18 @@ struct Envelope<T> {
     data: T,
 }
 #[derive(Deserialize)]
-struct Member {
-    id: String,
-}
-#[derive(Deserialize)]
-struct Members {
-    items: Vec<Member>,
-    page: MemberPage,
-}
-#[derive(Deserialize)]
-struct MemberPage {
-    total: u64,
-}
-#[derive(Deserialize)]
 struct GroupRef {
-    id: String,
     enabled: bool,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct KeyInfo {
     id: String,
+    #[serde(default)]
+    name: String,
     enabled: bool,
+    #[serde(default)]
     groups: Vec<GroupRef>,
-    max_concurrency: u64,
-    requests_per_minute: u64,
-    daily_limit_usd: String,
-    weekly_limit_usd: String,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -98,30 +80,54 @@ fn query(path: &str, params: &[(&str, &str)]) -> String {
         reqwest::Url::parse_with_params("http://127.0.0.1/", params).expect("fixed URL");
     format!("{path}?{}", parameters.query().unwrap_or_default())
 }
-fn verify_members(members: &Members, account: &str) -> Result<(), PluginFault> {
-    if members.page.total != 1 || members.items.len() != 1 || members.items[0].id != account {
+fn configured_selector(config: &Value) -> Result<(&str, &str), PluginFault> {
+    let id = config
+        .get("test_key_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default();
+    let name = config
+        .get("test_key_name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default();
+    if id.is_empty() && name.is_empty() {
         return Err(invalid(
-            "专用测试分组必须且只能包含目标账号；已拒绝执行，未改动其他成员",
+            "请在插件配置中填写已有测试 Key ID 或名称；插件不会自动创建分组和 Key",
         ));
     }
-    Ok(())
+    if !id.is_empty() && !name.is_empty() {
+        return Err(invalid("测试 Key ID 和名称只能填写一个"));
+    }
+    Ok((id, name))
 }
-fn verify_key(key: &KeyInfo, group: &str) -> Result<(), PluginFault> {
-    let positive = |s: &str| s.parse::<f64>().is_ok_and(|n| n.is_finite() && n > 0.0);
-    if !key.enabled
-        || key.groups.len() != 1
-        || key.groups[0].id != group
-        || !key.groups[0].enabled
-        || !(1..=16).contains(&key.max_concurrency)
-        || !(1..=120).contains(&key.requests_per_minute)
-        || !positive(&key.daily_limit_usd)
-        || !positive(&key.weekly_limit_usd)
-    {
-        return Err(invalid(
-            "专用测试 Key 的分组、启用状态或预算限制已变更；已拒绝借用业务 Key",
-        ));
+
+async fn find_key(host: &HostClient, config: &Value) -> Result<KeyInfo, PluginFault> {
+    let (wanted_id, wanted_name) = configured_selector(config)?;
+    let mut cursor = String::new();
+    let mut matches = Vec::new();
+    loop {
+        let mut params = vec![("limit", "100")];
+        if !cursor.is_empty() {
+            params.push(("cursor", cursor.as_str()));
+        }
+        let page: Keys = admin(host, query("/api/admin/client-keys", &params)).await?;
+        matches.extend(page.items.into_iter().filter(|key| {
+            (!wanted_id.is_empty() && key.id == wanted_id)
+                || (!wanted_name.is_empty() && key.name == wanted_name)
+        }));
+        let Some(next) = page.next_cursor.filter(|next| next != &cursor) else {
+            break;
+        };
+        cursor = next;
     }
-    Ok(())
+    match matches.len() {
+        1 => Ok(matches.remove(0)),
+        0 => Err(invalid("找不到配置的测试 Key，请检查 Key ID 或名称")),
+        _ => Err(invalid("测试 Key 名称不唯一，请改用 Key ID")),
+    }
 }
 
 pub async fn prepare(
@@ -135,62 +141,14 @@ pub async fn prepare(
             .and_then(Value::as_str)
             .unwrap_or("http://127.0.0.1:8080"),
     )?;
-    let resource_key = format!("background-{}", credential.id);
-    let group = host
-        .ensure_group(GroupEnsureRequest {
-            resource_key: resource_key.clone(),
-            name: format!("糖果自检·{resource_key}"),
-            color: "#D97706FF".into(),
-            description: Some("插件自有单账号测试组；不替换账号原有分组。".into()),
-        })
-        .await?;
-    if !group.enabled {
-        return Err(invalid("专用测试分组已停用"));
-    }
-    host.change_group_members(GroupMembersChange {
-        resource_key: resource_key.clone(),
-        add: vec![credential.id.clone()],
-        remove: vec![],
-    })
-    .await?;
-    let members: Members = admin(
-        host,
-        query(
-            "/api/admin/accounts",
-            &[("groupId", &group.id), ("pageSize", "2")],
-        ),
-    )
-    .await?;
-    verify_members(&members, &credential.id)?;
-    let key = host
-        .ensure_key(KeyEnsureRequest {
-            resource_key: resource_key.clone(),
-            name: format!("糖果自检·{resource_key}"),
-            group_resource_keys: vec![resource_key],
-            max_concurrency: 16,
-            requests_per_minute: 120,
-            daily_limit_usd: "5".into(),
-            weekly_limit_usd: "20".into(),
-        })
-        .await?;
+    let key = find_key(host, config).await?;
     if !key.enabled {
-        return Err(invalid("专用测试 Key 已停用"));
+        return Err(invalid("配置的测试 Key 已停用"));
     }
-    let mut cursor = String::new();
-    loop {
-        let mut params = vec![("search", key.name.as_str()), ("limit", "100")];
-        if !cursor.is_empty() {
-            params.push(("cursor", cursor.as_str()));
-        }
-        let page: Keys = admin(host, query("/api/admin/client-keys", &params)).await?;
-        if let Some(info) = page.items.iter().find(|v| v.id == key.id) {
-            verify_key(info, &group.id)?;
-            break;
-        }
-        let Some(next) = page.next_cursor.filter(|next| next != &cursor) else {
-            return Err(invalid("无法核验专用测试 Key 的权限"));
-        };
-        cursor = next;
+    if key.groups.is_empty() || key.groups.iter().any(|group| !group.enabled) {
+        return Err(invalid(
+            "配置的测试 Key 未绑定有效分组，请检查其账号访问范围",
+        ));
     }
     let secret: Revealed = admin(
         host,
@@ -198,7 +156,7 @@ pub async fn prepare(
     )
     .await?;
     if secret.id != key.id {
-        return Err(invalid("专用测试 Key 身份不一致"));
+        return Err(invalid("配置的测试 Key 身份不一致"));
     }
     HttpExecutor::new(
         endpoint,
@@ -213,54 +171,29 @@ mod tests {
     use super::*;
     use serde_json::json;
     #[test]
-    fn reject_wrong_or_multiple_accounts_including_truncated_page() {
-        for data in [
-            json!({"items":[],"page":{"total":0}}),
-            json!({"items":[{"id":"other"}],"page":{"total":1}}),
-            json!({"items":[{"id":"fixture"}],"page":{"total":2}}),
-        ] {
-            assert!(verify_members(&serde_json::from_value(data).unwrap(), "fixture").is_err());
-        }
-        assert!(verify_members(
-            &Members {
-                items: vec![Member {
-                    id: "fixture".into()
-                }],
-                page: MemberPage { total: 1 }
-            },
-            "fixture"
-        )
-        .is_ok());
+    fn requires_one_existing_key_selector() {
+        assert_eq!(
+            configured_selector(&json!({"test_key_id":" key_1 "})).unwrap(),
+            ("key_1", "")
+        );
+        assert_eq!(
+            configured_selector(&json!({"test_key_name":" shared test "})).unwrap(),
+            ("", "shared test")
+        );
+        assert!(configured_selector(&json!({})).is_err());
+        assert!(
+            configured_selector(&json!({"test_key_id":"key_1", "test_key_name":"shared"})).is_err()
+        );
     }
     #[test]
-    fn account_page_requires_official_nested_pagination() {
-        // CPR 3.28 AccountPageData uses PageMeta: data.page.total, not data.total.
-        let official = json!({"data":{"items":[{"id":"fixture"}],"page":{"page":1,"pageSize":2,"total":1,"totalPages":1}}});
-        let page: Envelope<Members> = serde_json::from_value(official).unwrap();
-        assert!(verify_members(&page.data, "fixture").is_ok());
-        for malformed in [
-            json!({"items":[{"id":"fixture"}],"total":1}),
-            json!({"items":[{"id":"fixture"}],"page":{}}),
-        ] {
-            assert!(serde_json::from_value::<Members>(malformed).is_err());
-        }
-    }
-    #[test]
-    fn reject_unscoped_disabled_and_unlimited_keys() {
-        let baseline = json!({"id":"fixture", "enabled":true,"groups":[{"id":"group","enabled":true}],"maxConcurrency":16,"requestsPerMinute":120,"dailyLimitUsd":"5","weeklyLimitUsd":"20"});
-        assert!(verify_key(&serde_json::from_value(baseline.clone()).unwrap(), "group").is_ok());
-        for (field, value) in [
-            ("groups", json!([])),
-            ("groups", json!([{"id":"other","enabled":true}])),
-            ("enabled", json!(false)),
-            ("dailyLimitUsd", json!("0")),
-            ("weeklyLimitUsd", json!("NaN")),
-            ("maxConcurrency", json!(0)),
-            ("requestsPerMinute", json!(0)),
-        ] {
-            let mut data = baseline.clone();
-            data[field] = value;
-            assert!(verify_key(&serde_json::from_value(data).unwrap(), "group").is_err());
-        }
+    fn key_info_accepts_admin_list_shape() {
+        let key: KeyInfo = serde_json::from_value(json!({
+            "id":"key_1", "name":"shared test", "enabled":true,
+            "groups":[{"id":"all", "enabled":true}]
+        }))
+        .unwrap();
+        assert_eq!(key.id, "key_1");
+        assert_eq!(key.name, "shared test");
+        assert!(key.enabled);
     }
 }

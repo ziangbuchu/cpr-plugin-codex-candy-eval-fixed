@@ -31,6 +31,12 @@ impl Fixture {
     }
 
     async fn configured(configuration: Value) -> Self {
+        let mut configuration = configuration;
+        if let Some(object) = configuration.as_object_mut() {
+            object
+                .entry("test_key_id")
+                .or_insert_with(|| json!("fixture-background-key"));
+        }
         let mut child = Command::new(env!("CARGO_BIN_EXE_codex-proxy-plugin-candy-eval"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -179,55 +185,14 @@ impl Fixture {
         };
         let mut payload = Vec::new();
         let result = match method.as_str() {
-            "host.groups.ensure" => {
-                // Official native-resource callbacks use a payload, not metadata params.
-                assert_eq!(params, json!({}));
-                let request: gateway_plugin_sdk::call::resources::GroupEnsureRequest =
-                    serde_json::from_slice(&frame.payload).unwrap();
-                assert!(
-                    request.color.len() == 9
-                        && request.color.starts_with('#')
-                        && request.color[1..].bytes().all(|b| b.is_ascii_hexdigit()),
-                    "CPR requires #RRGGBBAA group colors"
-                );
-                payload = serde_json::to_vec(
-                    &json!({"id":"fixture-group","name":"fixture group","enabled":true}),
-                )
-                .unwrap();
-                json!({})
-            }
-            "host.groups.change_members" => {
-                assert_eq!(params, json!({}));
-                let request: gateway_plugin_sdk::call::resources::GroupMembersChange =
-                    serde_json::from_slice(&frame.payload).unwrap();
-                assert_eq!(request.add, ["fixture-account"]);
-                assert!(request.remove.is_empty());
-                payload = serde_json::to_vec(&json!({"added":1,"removed":0})).unwrap();
-                json!({})
-            }
-            "host.keys.ensure" => {
-                assert_eq!(params, json!({}));
-                let request: gateway_plugin_sdk::call::resources::KeyEnsureRequest =
-                    serde_json::from_slice(&frame.payload).unwrap();
-                assert_eq!(request.group_resource_keys, ["background-fixture-account"]);
-                assert_eq!(request.max_concurrency, 16);
-                assert_eq!(request.requests_per_minute, 120);
-                assert_eq!(request.daily_limit_usd, "5");
-                assert_eq!(request.weekly_limit_usd, "20");
-                payload = serde_json::to_vec(&json!({"id":"fixture-background-key","name":"fixture background key","enabled":true})).unwrap();
-                json!({})
-            }
             "host.http.dispatch" => {
                 assert!(params["settings"].is_null());
                 let uri = params["uri"].as_str().unwrap();
-                let data = if uri.starts_with("/api/admin/accounts?") {
-                    assert!(uri.contains("groupId=fixture-group"));
-                    json!({"items":[{"id":"fixture-account"}],"page":{"page":1,"pageSize":2,"total":1,"totalPages":1}})
-                } else if uri.starts_with("/api/admin/client-keys/reveal?") {
+                let data = if uri.starts_with("/api/admin/client-keys/reveal?") {
                     assert!(uri.contains("id=fixture-background-key"));
                     json!({"id":"fixture-background-key","plaintextKey":"fixture-only-not-a-real-key"})
                 } else if uri.starts_with("/api/admin/client-keys?") {
-                    json!({"items":[{"id":"fixture-background-key","enabled":true,"groups":[{"id":"fixture-group","enabled":true}],"maxConcurrency":16,"requestsPerMinute":120,"dailyLimitUsd":"5","weeklyLimitUsd":"20"}],"nextCursor":null})
+                    json!({"items":[{"id":"fixture-background-key","name":"fixture shared test key","enabled":true,"groups":[{"id":"fixture-group","enabled":true}]}],"nextCursor":null})
                 } else {
                     panic!("unexpected synthetic admin route")
                 };

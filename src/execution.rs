@@ -1,5 +1,5 @@
 //! Two execution paths: native SDK for existing synchronous callers, and loopback HTTP
-//! with an instance-owned, single-account Key for jobs independent of any RPC scope.
+//! with an administrator-selected shared Key for jobs independent of any RPC scope.
 use crate::host_calls::{self, ModelAnswer, ModelError, ModelFailure};
 use gateway_plugin_sdk::{client::HostClient, ErrorCode, PluginFault};
 use reqwest::{
@@ -140,8 +140,8 @@ impl ExecutionContext for HttpExecutor {
         if !status.is_success() {
             // Do not copy CPR/upstream error bodies: these may contain credentials/URLs.
             let message = match status.as_u16() {
-                401 | 403 => "专用测试 Key 被拒绝，请检查 Key 状态和测试分组",
-                429 => "专用测试 Key 达到预算、并发或速率上限",
+                401 | 403 => "配置的测试 Key 被拒绝，请检查 Key 状态和账号/分组权限",
+                429 => "配置的测试 Key 达到预算、并发或速率上限",
                 400 | 404 | 422 => "CPR 拒绝了测试模型或请求参数",
                 _ => "CPR 测试接口返回错误",
             };

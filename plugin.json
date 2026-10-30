@@ -3,7 +3,7 @@
   "name": "codex-candy-eval",
   "displayName": "Codex 降智与指纹测试",
   "publisher": "nmbb",
-  "version": "1.7.1",
+  "version": "1.7.2",
   "description": "CPR（codex-proxy-rs）原生 Rust 插件：Codex 账号降智检测、模型指纹对比、深度追踪与鹈鹕绘图测试套件（魔改移植自 cpa-plugin-codex-candy-eval）",
   "license": "MIT",
   "author": "nmbb",
@@ -25,6 +25,16 @@
         "title": "CPR 本机接口地址",
         "description": "插件与 CPR 共用网络命名空间。仅接受回环 IP，不接受域名、认证或路径；默认无需填写。",
         "default": "http://127.0.0.1:8080"
+      },
+      "test_key_id": {
+        "type": "string",
+        "title": "已有测试 Key ID",
+        "description": "复用 CPR 中已有的测试 Key。填写 ID 或下方名称之一；插件不会创建分组或 Key。"
+      },
+      "test_key_name": {
+        "type": "string",
+        "title": "已有测试 Key 名称",
+        "description": "当不清楚 Key ID 时可填写 CPR 中的唯一名称；名称重复时请改填 ID。"
       },
       "hourly_candy_enabled": {
         "type": "boolean",
