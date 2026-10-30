@@ -1,0 +1,72 @@
+{
+  "manifestVersion": 2,
+  "name": "codex-candy-eval",
+  "displayName": "Codex 降智与指纹测试",
+  "publisher": "nmbb",
+  "version": "1.7.1",
+  "description": "CPR（codex-proxy-rs）原生 Rust 插件：Codex 账号降智检测、模型指纹对比、深度追踪与鹈鹕绘图测试套件（魔改移植自 cpa-plugin-codex-candy-eval）",
+  "license": "MIT",
+  "author": "nmbb",
+  "engines": {
+    "codex-proxy-rs": ">=3.33.0, <3.36.0"
+  },
+  "main": "bin/plugin",
+  "runtime": "trustedProcess",
+  "contributes": {
+    "management": { "version": 2 },
+    "command_line": {},
+    "maintenance": {}
+  },
+  "configurationSchema": {
+    "type": "object",
+    "properties": {
+      "api_base_url": {
+        "type": "string",
+        "title": "CPR 本机接口地址",
+        "description": "插件与 CPR 共用网络命名空间。仅接受回环 IP，不接受域名、认证或路径；默认无需填写。",
+        "default": "http://127.0.0.1:8080"
+      },
+      "hourly_candy_enabled": {
+        "type": "boolean",
+        "title": "每小时自动测试糖果题",
+        "description": "每个启用账号每小时测试 1 次；后台执行，忙碌账号跳过，重启不重复补跑。",
+        "default": false
+      },
+      "hourly_candy_model": {
+        "type": "string",
+        "title": "自动糖果测试模型",
+        "minLength": 1,
+        "default": "gpt-6.1-sol"
+      },
+      "hourly_candy_effort": {
+        "type": "string",
+        "title": "自动糖果测试推理强度",
+        "enum": ["none", "low", "medium", "high", "xhigh", "max"],
+        "default": "low"
+      }
+    },
+    "additionalProperties": false
+  },
+  "resources": {
+    "web/ui.html": "text/html",
+    "web/theme.css": "text/css",
+    "web/style.css": "text/css",
+    "web/vendor/temml.css": "text/css",
+    "web/vendor/temml-fc70501355ae.woff2": "font/woff2",
+    "web/vendor/temml-d065b0c621f6.svg": "image/svg+xml",
+    "web/assets/bg-98826c21ff06.svg": "image/svg+xml"
+  },
+  "state": [
+    {
+      "namespace": "candy-eval",
+      "schemaVersion": 1,
+      "schema": {
+        "type": "object"
+      },
+      "maximumRecords": 40,
+      "maximumBytes": 2097152,
+      "maximumValueBytes": 262144,
+      "migratesFrom": []
+    }
+  ]
+}

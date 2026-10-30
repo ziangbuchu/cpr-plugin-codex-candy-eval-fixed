@@ -1,0 +1,27 @@
+[package]
+name = "codex-proxy-plugin-candy-eval"
+version = "1.7.1"
+edition = "2021"
+
+[lib]
+name = "codex_proxy_plugin_candy_eval"
+path = "src/lib.rs"
+
+[[bin]]
+name = "codex-proxy-plugin-candy-eval"
+path = "src/main.rs"
+
+[dependencies]
+gateway-plugin-sdk = { git = "https://github.com/zyycn/codex-proxy-rs.git", tag = "v3.35.1", features = ["io"] }
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
+sha2 = "0.10"
+hex = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+regex = "1.10"
+sha1 = "0.10"
+rand = "0.8"
+crc32fast = "1.4"
+unicode-normalization = "0.1"

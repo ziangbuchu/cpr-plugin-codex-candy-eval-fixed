@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="zh-CN">
+<!-- ModelTrace
+MIT License
+
+Copyright (c) 2026 xqy2006
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+-->
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Codex 降智测试</title>
+  <!-- 宿主桥在 <head> 最前面注入；存在即说明本页运行在 CPR 插件沙箱里。 -->
+  <script>if (window.codexProxyPlugin) document.documentElement.dataset.cprPluginHost = "";</script>
+  <link rel="stylesheet" href="vendor/temml.css">
+  <link rel="stylesheet" href="theme.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <header>
+      <h1><i data-icon="candy"></i>Codex 降智测试</h1>
+    </header>
+
+    <section id="login" class="card login" hidden>
+      <h2>连接 CPA</h2>
+      <p>请输入 CPA 管理密钥。登录 CPA 管理面板时勾选「记住密码」，本页会自动使用该密钥。</p>
+      <form id="login-form">
+        <input id="login-key" type="password" autocomplete="current-password" placeholder="管理密钥" aria-label="管理密钥" required>
+        <button class="btn" type="submit">连接</button>
+      </form>
+      <p id="login-error" class="error" hidden></p>
+    </section>
+
+    <div id="app" hidden>
+      <div class="page-navigation card">
+        <div class="tabs" role="tablist" aria-label="测试类型">
+          <button id="tab-candy" class="tab" role="tab" aria-selected="true" aria-controls="candy-panel" type="button">糖果</button>
+          <button id="tab-modeltrace" class="tab" role="tab" aria-selected="false" aria-controls="modeltrace-panel" tabindex="-1" type="button">ModelTrace</button>
+          <button id="tab-pelican" class="tab" role="tab" aria-selected="false" aria-controls="pelican-panel" tabindex="-1" type="button">鹈鹕</button>
+        </div>
+        <div class="page-actions">
+          <button id="clear-all" type="button" aria-label="清空全部测试记录" data-tip disabled><i data-icon="trash-2"></i></button>
+          <button id="refresh" type="button" aria-label="刷新凭证和模型" data-tip aria-busy="false"><i data-icon="rotate-cw"></i></button>
+        </div>
+      </div>
+      <div id="notifications"></div>
+      <section id="candy-panel" role="tabpanel" aria-labelledby="tab-candy">
+        <div class="panel-intro">
+          <p>让模型解一道糖果题，答出 <b class="mono">21</b> 即为正确。</p>
+          <details class="problem">
+            <summary><i data-icon="chevron-right" data-class="chev"></i>查看题目</summary>
+            <div class="problem-body"><pre class="mono"><code>不使用任何外部工具回答以下问题：
+
+在一个黑色的袋子里放有三种口味的糖果，每种糖果有两种不同的形状（圆形和五角星形，不同的形状靠手感可以分辨）。现已知不同口味的糖和不同形状的数量统计如下表。参赛者需要在活动前决定摸出的糖果数目，那么，最少取出多少个糖果才能保证手中同时拥有不同形状的苹果味和桃子味的糖？（同时手中有圆形苹果味匹配五角星桃子味糖果，或者有圆形桃子味匹配五角星苹果味糖果都满足要求）
+
+        苹果味  桃子味  西瓜味
+圆形       7      9      8
+五角星形   7      6      4
+</code></pre>
+              <button class="copy-btn" type="button" aria-label="复制题目" data-tip></button>
+            </div>
+          </details>
+        </div>
+        <div id="hourly-candy" class="legend" role="status" aria-live="polite" hidden></div>
+        <form id="toolbar" class="card toolbar">
+          <label class="field"><span class="field-label">模型</span><span class="native-select"><select id="model"></select></span></label>
+          <label class="field"><span class="field-label">推理强度</span><span class="native-select"><select id="effort" data-tip="none：不指定推理强度，由 CPA 决定；其他强度是否可用由 CPA 或上游判断"></select></span></label>
+          <label class="field"><span class="field-label">每凭证次数</span><input id="runs" class="mono" type="number" min="1" max="10" step="1" value="1" required></label>
+          <button id="run-batch" class="btn" type="submit" disabled>测试全部</button>
+        </form>
+
+        <div class="legend">
+          <span><i data-icon="circle-check" data-class="mark ok"></i>答对</span>
+          <span><i data-icon="circle-x" data-class="mark bad"></i>答错</span>
+          <span><i data-icon="circle-alert" data-class="mark err"></i>请求出错</span>
+          <span><i data-icon="ban" data-class="mark err"></i>已跳过</span>
+          <span><i data-icon="circle-check" data-class="mark ok dim"></i>其他模型或推理强度</span>
+          <span id="rate-scope"></span>
+        </div>
+
+        <section id="candy-credentials" class="card"></section>
+      </section>
+      <section id="fingerprint-panel" role="tabpanel" aria-labelledby="tab-fingerprint" hidden>
+        <div class="panel-intro">
+          <p>采集模型的回答特征，与正常基准对比，判断模型是否被替换。</p>
+          <details class="problem" id="fp-principle">
+            <summary><i data-icon="chevron-right" data-class="chev"></i>查看原理</summary>
+            <div class="problem-body principle-body">
+              <p>即使让模型“随便说一个数字或颜色”，不同模型也会呈现不同的回答偏好。重复提问后，这些偏好就形成了可比较的行为“指纹”。</p>
+              <p>本测试采集多组简短回答，与正常模型的指纹对比，判断是否一致、是否更像其他模型。结果基于统计特征，不能单独证明模型身份或能力。</p>
+              <p>来源论文：Tomas Bruckner，<span class="mono" data-tip="One Token Is Enough: Fingerprinting and Verifying Large Language Models from Single-Token Output Distributions">《One Token Is Enough》</span>（2026）。</p>
+            </div>
+          </details>
+        </div>
+        <form id="fp-toolbar" class="card toolbar">
+          <label class="field"><span class="field-label">模型</span><span class="native-select"><select id="fp-model"></select></span></label>
+          <label class="field"><span class="field-label">采集模式</span><span class="native-select"><select id="fp-mode"></select></span></label>
+          <label class="field"><span class="field-label">每凭证并发</span><input id="fp-concurrency" class="mono" type="number" min="1" step="1" required></label>
+          <button id="fp-run-batch" class="btn" type="submit" disabled>采集全部</button>
+        </form>
+        <div class="legend"><span id="fp-cost"></span></div>
+        <section id="fp-credentials" class="card"></section>
+      </section>
+      <section id="modeltrace-panel" role="tabpanel" aria-labelledby="tab-modeltrace" hidden>
+        <div class="panel-intro">
+          <p>通过三次数字生成挑战，识别最接近的模型家族与版本。</p>
+          <details class="problem" id="mt-principle">
+            <summary><i data-icon="chevron-right" data-class="chev"></i>查看原理</summary>
+            <div class="problem-body principle-body">
+              <p>不同模型生成长整数序列时，会表现出不同的数字偏好与排列特征。本测试自动采集三份回答，提取数字分布和序列特征，与候选模型的指纹对比。</p>
+              <p>比对时先减弱提示词等环境因素的影响，再汇总三份回答的得分，计算各模型的归因概率。同一家族内各模型的概率之和，即为家族概率。</p>
+              <p>方法来源：<span class="mono">ModelTrace</span>。</p>
+            </div>
+          </details>
+        </div>
+        <form id="mt-toolbar" class="card toolbar">
+          <label class="field"><span class="field-label">模型</span><span class="native-select"><select id="mt-model"></select></span></label>
+          <label class="field"><span class="field-label">每凭证并发</span><input id="mt-concurrency" class="mono" type="number" min="1" step="1" required></label>
+          <button id="mt-run-batch" class="btn" type="submit" disabled>测试全部</button>
+        </form>
+        <div class="legend"><span id="mt-cost"></span></div>
+        <section id="mt-credentials" class="card"></section>
+      </section>
+      <section id="pelican-panel" role="tabpanel" aria-labelledby="tab-pelican" hidden>
+        <div class="panel-intro">
+          <p>让模型写一个 HTML 页面，用 SVG 绘制鹈鹕骑自行车的动画。</p>
+          <details class="problem">
+            <summary><i data-icon="chevron-right" data-class="chev"></i>查看题目</summary>
+            <div class="problem-body"><pre class="mono"><code>不使用任何工具，也不要创建或修改文件，直接在回复中完成以下任务：
+
+创建一个 HTML，内容是 SVG 绘制一个鹈鹕骑自行车的 2D 动画，你不需要任何测试，不要使用外部资产。
+
+在一个 ```html 代码块中给出完整的 HTML 文件。</code></pre>
+              <button class="copy-btn" type="button" aria-label="复制题目" data-tip></button>
+            </div>
+          </details>
+        </div>
+        <form id="pl-toolbar" class="card toolbar">
+          <label class="field"><span class="field-label">模型</span><span class="native-select"><select id="pl-model"></select></span></label>
+          <label class="field"><span class="field-label">推理强度</span><span class="native-select"><select id="pl-effort" data-tip="none：不指定推理强度，由 CPA 决定；其他强度是否可用由 CPA 或上游判断"></select></span></label>
+          <button id="pl-run-batch" class="btn" type="submit" disabled>测试全部</button>
+        </form>
+        <div class="legend"><span>每个凭证 1 次请求</span></div>
+        <section id="pl-credentials" class="card"></section>
+      </section>
+    </div>
+
+    <dialog id="confirm-clear" class="confirm">
+      <form method="dialog">
+        <h2 id="clear-title">清空测试记录？</h2>
+        <p>此操作对所有凭证生效，删除后无法恢复。正在进行的测试不受影响，完成后仍会保存结果。</p>
+        <div class="dialog-actions">
+          <button class="btn ghost" value="cancel" autofocus>取消</button>
+          <button class="btn danger" value="confirm">清空记录</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="fp-detail" class="result-dialog" aria-labelledby="fp-detail-title">
+      <div class="section-head result-dialog-head"><h2 id="fp-detail-title">指纹详情</h2><button id="fp-detail-close" class="btn ghost icon-button" type="button" aria-label="关闭详情"><i data-icon="x"></i></button></div>
+      <div id="fp-detail-body" class="result-dialog-body"></div>
+    </dialog>
+    <dialog id="mt-detail" class="result-dialog" aria-labelledby="mt-detail-title">
+      <div class="section-head result-dialog-head"><h2 id="mt-detail-title">ModelTrace 详情</h2><button id="mt-detail-close" class="btn ghost icon-button" type="button" aria-label="关闭 ModelTrace 详情"><i data-icon="x"></i></button></div>
+      <div id="mt-detail-body" class="result-dialog-body"></div>
+    </dialog>
+    <dialog id="pl-detail" class="result-dialog" aria-labelledby="pl-detail-title">
+      <div class="section-head result-dialog-head"><h2 id="pl-detail-title">鹈鹕动画</h2><button id="pl-detail-close" class="btn ghost icon-button" type="button" aria-label="关闭动画"><i data-icon="x"></i></button></div>
+      <div id="pl-detail-body" class="result-dialog-body"></div>
+    </dialog>
+    <div id="tip" class="tip" role="tooltip" hidden></div>
+  </main>
+  <footer class="page-footer">
+    <span>© 2026 <span class="mono">CPA Codex Candy Eval</span></span>
+    <span>&thinsp;·&thinsp;<span class="mono">MIT</span></span>
+    <span>&thinsp;·&thinsp;版本 v{{PLUGIN_VERSION}}</span>
+  </footer>
+
+  <script src="vendor/markdown-it.min.js"></script>
+  <script src="vendor/markdown-it-cjk-friendly.min.js"></script>
+  <script src="vendor/texmath.js"></script>
+  <script src="vendor/temml.min.js"></script>
+  <script src="credentials.js"></script>
+  <script src="catalog.js"></script>
+  <script src="components.js"></script>
+  <script src="candy.js"></script>
+  <script src="fingerprint.js"></script>
+  <script src="modeltrace.js"></script>
+  <script src="pelican.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

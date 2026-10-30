@@ -1,0 +1,196 @@
+diff --git a/backend/crates/gateway-api/src/admin/plugins/management.rs b/backend/crates/gateway-api/src/admin/plugins/management.rs
+index 4110e54..0c5bdb1 100644
+--- a/backend/crates/gateway-api/src/admin/plugins/management.rs
++++ b/backend/crates/gateway-api/src/admin/plugins/management.rs
+@@ -1,5 +1,7 @@
+ //! 插件管理页面、资源、授权回调与页面模型请求的 HTTP 边界
+ 
++mod background;
++
+ use std::{net::SocketAddr, sync::Arc};
+ 
+ use axum::{
+@@ -296,7 +298,7 @@ async fn views<S: SessionState + Send + Sync>(
+     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(views)))
+ }
+ 
+-async fn handle<S: SessionState + Send + Sync>(
++async fn handle<S: SessionState + Send + Sync + 'static>(
+     auth: AdminAuth,
+     State(state): State<S>,
+     Path(path): Path<ResourcePath>,
+@@ -311,29 +313,42 @@ async fn handle<S: SessionState + Send + Sync>(
+     let target = path.target();
+     let method = request.method().as_str().to_owned();
+     let query = request.uri().query().unwrap_or_default().to_owned();
+-    let headers = encode_headers(request.headers());
++    // 显式选择后台执行；浏览器不能伪造宿主交付给插件的确认标记。
++    let background = background::requested(&method, &query)?;
++    let mut incoming_headers = request.headers().clone();
++    incoming_headers.remove(background::HOST_HEADER);
++    if background {
++        incoming_headers.insert(background::HOST_HEADER, HeaderValue::from_static("1"));
++    }
++    let headers = encode_headers(&incoming_headers);
+     let body = to_bytes(request.into_body(), MAXIMUM_BODY_BYTES)
+         .await
+         .map_err(|_| {
+             AdminError::invalid_request(StatusCode::PAYLOAD_TOO_LARGE, "插件管理正文过大或无法读取")
+         })?;
+-    let result = state
+-        .admin_services()
+-        .plugin_management()
+-        .handle(
+-            &target,
+-            PluginManagementRequest {
+-                method,
+-                path: path.path,
+-                query,
+-                content_type,
+-                headers,
+-                body: body.to_vec(),
+-                request_id: auth.context().request_id.clone(),
+-            },
+-        )
++    let request_id = auth.context().request_id.clone();
++    let call = async move {
++        state
++            .admin_services()
++            .plugin_management()
++            .handle(
++                &target,
++                PluginManagementRequest {
++                    method,
++                    path: path.path,
++                    query,
++                    content_type,
++                    headers,
++                    body: body.to_vec(),
++                    request_id,
++                },
++            )
++            .await
++            .map_err(map_admin_service_error)
++    };
++    let result = background::complete(background, call)
+         .await
+-        .map_err(map_admin_service_error)?;
++        .map_err(|_| AdminError::internal())??;
+     raw_response(result)
+ }
+ 
+diff --git a/backend/crates/gateway-api/src/admin/plugins/management/background.rs b/backend/crates/gateway-api/src/admin/plugins/management/background.rs
+new file mode 100644
+index 0000000..bb04906
+--- /dev/null
++++ b/backend/crates/gateway-api/src/admin/plugins/management/background.rs
+@@ -0,0 +1,109 @@
++//! 显式后台管理调用：HTTP 等待者离开后保留原 RPC 作用域。
++//!
++//! 仅已认证且完整读取正文的 POST 可通过 `__cpr_background=1` 选择此语义。
++//! 未选择的调用保持原取消行为；RPC 权限、并发和超时仍由 Runtime 限制。
++
++use std::future::Future;
++
++use tokio::task::JoinError;
++
++use crate::admin::AdminError;
++
++pub(super) const HOST_HEADER: &str = "x-cpr-management-background";
++
++pub(super) fn requested(method: &str, query: &str) -> Result<bool, AdminError> {
++    let mut flags =
++        url::form_urlencoded::parse(query.as_bytes()).filter(|(key, _)| key == "__cpr_background");
++    let Some((_, value)) = flags.next() else {
++        return Ok(false);
++    };
++    if method != "POST" || value != "1" || flags.next().is_some() {
++        return Err(AdminError::bad_request(
++            "后台管理调用仅支持 POST 与唯一的 __cpr_background=1",
++        ));
++    }
++    Ok(true)
++}
++
++pub(super) async fn complete<F>(background: bool, call: F) -> Result<F::Output, JoinError>
++where
++    F: Future + Send + 'static,
++    F::Output: Send + 'static,
++{
++    if background {
++        // 丢弃 JoinHandle 只分离等待者，不取消其拥有的调用作用域。
++        tokio::spawn(call).await
++    } else {
++        Ok(call.await)
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use tokio::sync::oneshot;
++
++    #[test]
++    fn background_is_explicit_post_only_and_unambiguous() {
++        assert!(matches!(requested("GET", ""), Ok(false)));
++        assert!(matches!(requested("POST", "a=1"), Ok(false)));
++        assert!(matches!(
++            requested("POST", "a=1&__cpr_background=1"),
++            Ok(true)
++        ));
++        for (method, query) in [
++            ("GET", "__cpr_background=1"),
++            ("POST", "__cpr_background=0"),
++            ("POST", "__cpr_background=1&__cpr_%62ackground=1"),
++        ] {
++            assert!(requested(method, query).is_err());
++        }
++    }
++
++    #[tokio::test]
++    async fn background_call_completes_after_its_http_waiter_is_aborted() {
++        let (started_tx, started_rx) = oneshot::channel();
++        let (release_tx, release_rx) = oneshot::channel();
++        let (finished_tx, finished_rx) = oneshot::channel();
++        let waiter = tokio::spawn(complete(true, async move {
++            let _ = started_tx.send(());
++            release_rx.await.expect("release background execution");
++            let _ = finished_tx.send(());
++        }));
++        started_rx.await.expect("execution started");
++        waiter.abort();
++        assert!(waiter.await.is_err());
++        release_tx.send(()).expect("execution outlives HTTP waiter");
++        finished_rx.await.expect("execution completed");
++    }
++
++    #[tokio::test]
++    async fn foreground_keeps_its_original_cancellation_contract() {
++        let (started_tx, started_rx) = oneshot::channel();
++        let (_release_tx, release_rx) = oneshot::channel::<()>();
++        let (finished_tx, finished_rx) = oneshot::channel();
++        let waiter = tokio::spawn(complete(false, async move {
++            let _ = started_tx.send(());
++            let _ = release_rx.await;
++            let _ = finished_tx.send(());
++        }));
++        started_rx.await.expect("execution started");
++        waiter.abort();
++        assert!(waiter.await.is_err());
++        assert!(finished_rx.await.is_err());
++    }
++
++    #[tokio::test]
++    async fn background_returns_original_results_and_errors() {
++        assert_eq!(
++            complete(true, async { Ok::<_, &str>(7) }).await.unwrap(),
++            Ok(7)
++        );
++        assert_eq!(
++            complete(true, async { Err::<u8, _>("execution failed") })
++                .await
++                .unwrap(),
++            Err("execution failed")
++        );
++    }
++}
