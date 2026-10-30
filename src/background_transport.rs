@@ -8,6 +8,7 @@ use gateway_plugin_sdk::{
     client::{HostClient, HttpBody, HttpFrame, HttpRequest},
     ErrorCode, PluginFault,
 };
+use reqwest::Url;
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::Value;
 
@@ -130,11 +131,27 @@ async fn find_key(host: &HostClient, config: &Value) -> Result<KeyInfo, PluginFa
     }
 }
 
-pub async fn prepare(
+/// Resolve and reveal the configured Key once for a whole background batch.
+pub struct PreparedTransport {
+    endpoint: Url,
+    plaintext_key: String,
+}
+
+impl PreparedTransport {
+    pub fn for_credential(&self, credential: &Credential) -> Result<HttpExecutor, PluginFault> {
+        HttpExecutor::new(
+            self.endpoint.clone(),
+            credential.id.clone(),
+            credential.provider.clone(),
+            self.plaintext_key.clone(),
+        )
+    }
+}
+
+pub async fn prepare_shared(
     host: &HostClient,
-    credential: &Credential,
     config: &Value,
-) -> Result<HttpExecutor, PluginFault> {
+) -> Result<PreparedTransport, PluginFault> {
     let endpoint = execution::endpoint(
         config
             .get("api_base_url")
@@ -158,12 +175,10 @@ pub async fn prepare(
     if secret.id != key.id {
         return Err(invalid("配置的测试 Key 身份不一致"));
     }
-    HttpExecutor::new(
+    Ok(PreparedTransport {
         endpoint,
-        credential.id.clone(),
-        credential.provider.clone(),
-        secret.plaintext_key,
-    )
+        plaintext_key: secret.plaintext_key,
+    })
 }
 
 #[cfg(test)]

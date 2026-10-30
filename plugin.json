@@ -3,7 +3,7 @@
   "name": "codex-candy-eval",
   "displayName": "Codex 降智与指纹测试",
   "publisher": "nmbb",
-  "version": "1.7.2",
+  "version": "1.7.3",
   "description": "CPR（codex-proxy-rs）原生 Rust 插件：Codex 账号降智检测、模型指纹对比、深度追踪与鹈鹕绘图测试套件（魔改移植自 cpa-plugin-codex-candy-eval）",
   "license": "MIT",
   "author": "nmbb",

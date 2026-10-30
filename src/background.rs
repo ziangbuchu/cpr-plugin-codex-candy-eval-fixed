@@ -59,7 +59,15 @@ pub async fn submit(
             &json!({"error":format!("每凭证并发须为 1–{max_concurrency}")}),
         );
     }
-    management::refresh_credentials(state, host).await?;
+    let shared = match background_transport::prepare_shared(host, config).await {
+        Ok(shared) => shared,
+        Err(error) => {
+            return management::json_reply(409, &json!({"error": error.message}));
+        }
+    };
+    if let Err(error) = management::refresh_credentials(state, host).await {
+        return management::json_reply(502, &json!({"error": error.message}));
+    }
     let (targets, skipped, unchecked) = management::select(&state.credentials().await, &request);
     let mut busy = Vec::new();
     let mut prepared = Vec::new();
@@ -71,8 +79,15 @@ pub async fn submit(
         let executor = tokio::select! {
             biased;
             _ = lease.cancelled() => continue,
-            executor = background_transport::prepare(host, &credential, config) => executor,
-        }?;
+            executor = async { shared.for_credential(&credential) } => executor,
+        };
+        let executor = match executor {
+            Ok(executor) => executor,
+            Err(error) => {
+                lease.finish().await;
+                return management::json_reply(409, &json!({"error": error.message}));
+            }
+        };
         prepared.push((credential, lease, executor));
     }
     // All authorization checks succeed before any model call or success acknowledgement.
